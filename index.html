@@ -1,0 +1,99 @@
+<body style="margin:0;overflow:hidden;"></body>
+<script src="three.min.js"></script>
+<script src="space_frigate_6.js"></script>
+<script>
+
+(function() {
+  var scene = new THREE.Scene();
+  var sceneScreen = new THREE.Scene();
+
+  var cameraLeft = new THREE.PerspectiveCamera(75, innerWidth / 2 / innerHeight, 0.1, 1000);
+  var cameraRight = new THREE.PerspectiveCamera(75, innerWidth / 2 / innerHeight, 0.1, 1000);
+  var cameraScreen = new THREE.OrthographicCamera(-1, 1, -1, 1, -1, 1);
+
+  var renderer = new THREE.WebGLRenderer();
+  renderer.setSize(innerWidth, innerHeight);
+  renderer.autoClear = false;
+  document.body.appendChild(renderer.domElement);
+
+  var loader = new THREE.TextureLoader();
+  loader.load('space_frigate_6_color.png', function(colorTexture) {
+    loader.load('space_frigate_6_specular.png', function(specularTexture) {
+      loader.load('space_frigate_6_illumination.png', function(emissiveTexture) {
+        var rtTexture = new THREE.WebGLRenderTarget(innerWidth, innerHeight,
+          {minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, format: THREE.RGBFormat});
+
+        var quad = new THREE.Mesh(
+          new THREE.PlaneBufferGeometry(2, 2, 1),
+          new THREE.MeshBasicMaterial({color: 0xFFFFFF, map: rtTexture.texture}));
+        quad.rotation.x = Math.PI;
+        sceneScreen.add(quad);
+
+        var light = new THREE.AmbientLight(0xFFFFFF, 0.15);
+        scene.add(light);
+
+        var directionalLight = new THREE.DirectionalLight(0xFFFFFF, 0.85);
+        directionalLight.position.set(0, 1, 0);
+        scene.add(directionalLight);
+
+        var geometry = new THREE.Geometry();
+        space_frigate_6.vertices.forEach(function(v) {
+          geometry.vertices.push(new THREE.Vector3(v[0], v[1], v[2]));
+        });
+        space_frigate_6.faces.forEach(function(f) {
+          geometry.faces.push(new THREE.Face3(
+            f[0][0] - 1,
+            f[1][0] - 1,
+            f[2][0] - 1
+          ));
+          var c0 = space_frigate_6.coords[f[0][1] - 1];
+          var c1 = space_frigate_6.coords[f[1][1] - 1];
+          var c2 = space_frigate_6.coords[f[2][1] - 1];
+          geometry.faceVertexUvs[0].push([
+            new THREE.Vector2(c0[0], c0[1]),
+            new THREE.Vector2(c1[0], c1[1]),
+            new THREE.Vector2(c2[0], c2[1]),
+          ]);
+        });
+        geometry.computeFaceNormals();
+        geometry.computeBoundingSphere();
+
+        var material = new THREE.MeshPhongMaterial({
+          map: colorTexture,
+          shininess: 64,
+          specular: 0xFFFFFF,
+          specularMap: specularTexture,
+          emissive: 0xFFFFFF,
+          emissiveMap: emissiveTexture,
+        });
+        var cube = new THREE.Mesh(geometry, material);
+        scene.add(cube);
+
+        cameraLeft.position.z = 50;
+        cameraRight.position.z = 50;
+
+        function render() {
+          var leftWidth = innerWidth / 2 | 0;
+
+          requestAnimationFrame(render);
+
+          rtTexture.viewport = new THREE.Vector4(0, 0, leftWidth, innerHeight);
+          renderer.render(scene, cameraLeft, rtTexture, true);
+
+          rtTexture.viewport = new THREE.Vector4(leftWidth, 0, innerWidth - leftWidth, innerHeight);
+          renderer.render(scene, cameraRight, rtTexture, false);
+
+          renderer.setViewport(0, 0, innerWidth, innerHeight);
+          renderer.render(sceneScreen, cameraScreen, null, true);
+
+          cube.rotation.x += 0.001;
+          cube.rotation.y += 0.01;
+        }
+
+        render();
+      });
+    });
+  });
+})();
+
+</script>
