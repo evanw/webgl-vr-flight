@@ -1,19 +1,393 @@
 <body style="margin:0;overflow:hidden;"></body>
 <script src="three.min.js"></script>
 <script src="space_frigate_6.js"></script>
+<script type="text/plain" id="vertex-shader">
+
+attribute vec3 position;
+varying vec2 uv;
+
+void main() {
+  uv = position.xy * 0.5 + 0.5;
+  gl_Position = vec4(position, 1);
+}
+
+</script>
+<script type="text/plain" id="fragment-shader">
+
+precision highp float;
+
+uniform sampler2D texture;
+uniform vec4 lensFrustum;
+uniform vec4 noLensFrustum;
+uniform vec4 viewport;
+uniform vec2 distortion;
+varying vec2 uv;
+
+float distort(float r) {
+  float r2 = r * r;
+  float ret = 0.0;
+  ret = r2 * (ret + distortion.y);
+  ret = r2 * (ret + distortion.x);
+  return (ret + 1.0) * r;
+}
+
+vec3 viewer(float u, float v) {
+  u = (u - viewport.x) / viewport.z;
+  v = (v - viewport.y) / viewport.w;
+
+  float p = mix(noLensFrustum[0], noLensFrustum[2], u);
+  float q = mix(noLensFrustum[3], noLensFrustum[1], v);
+  float r = sqrt(p * p + q * q);
+  float d = distort(r);
+  float x = p * d / r;
+  float y = q * d / r;
+  float s = (x - lensFrustum[0]) / (lensFrustum[2] - lensFrustum[0]);
+  float t = (y - lensFrustum[3]) / (lensFrustum[1] - lensFrustum[3]);
+
+  return vec3(s, t, min(
+    clamp(20.0 * (0.5 - abs(0.5 - s)), 0.0, 1.0),
+    clamp(20.0 * (0.5 - abs(0.5 - t)), 0.0, 1.0)
+  ));
+}
+
+void main() {
+  vec3 info = uv.x < 0.5 ? viewer(uv.x, uv.y) : viewer(1.0 - uv.x, uv.y) * vec3(-1, 1, 1);
+  vec2 coord = vec2(uv.x < 0.5 ? info.x * 0.5 : info.x * 0.5 + 1.0, info.y);
+  gl_FragColor = vec4(texture2D(texture, coord).rgb * info.z, 1);
+}
+
+</script>
 <script>
+
+// Auto-refresh
+(function() {
+  function fetch() {
+    var xhr = new XMLHttpRequest;
+    xhr.onloadend = function() {
+      done(xhr.responseText);
+    };
+    xhr.open('GET', 'index.html');
+    xhr.send();
+  }
+
+  var previous = null;
+
+  function done(data) {
+    if (data) {
+      if (!previous) previous = data;
+      else if (data !== previous) location.reload();
+    }
+
+    setTimeout(fetch, 500);
+  }
+
+  fetch();
+})();
+
+(function() {
+  // Copyright 2014 Google Inc. All rights reserved.
+  //
+  // Licensed under the Apache License, Version 2.0 (the "License");
+  // you may not use this file except in compliance with the License.
+  // You may obtain a copy of the License at
+  //
+  //     http://www.apache.org/licenses/LICENSE-2.0
+  //
+  // Unless required by applicable law or agreed to in writing, software
+  // distributed under the License is distributed on an "AS IS" BASIS,
+  // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+  // See the License for the specific language governing permissions and
+  // limitations under the License.
+
+  function distort(coef, r) {
+    var r2 = r * r;
+    var ret = 0;
+    for (var j=coef.length-1; j>=0; j--) {
+      ret = r2 * (ret + coef[j]);
+    }
+    return (ret + 1) * r;
+  }
+
+  function VerticalLensOffset() {
+    return (viewer.lenses.offset - screen.border - screen.height/2) * viewer.lenses.alignment;
+  }
+
+  // Calculates the tan-angles from the maximum FOV for the left eye for the
+  // current device and screen parameters.
+  function GetLeftEyeVisibleTanAngles(result) {
+    // Tan-angles from the max FOV.
+    var fovLeft = Math.tan(-viewer.maxFOV.outer * (Math.PI / 180));
+    var fovTop = Math.tan(viewer.maxFOV.upper * (Math.PI / 180));
+    var fovRight = Math.tan(viewer.maxFOV.inner * (Math.PI / 180));
+    var fovBottom = Math.tan(-viewer.maxFOV.lower * (Math.PI / 180));
+    // Viewport size.
+    var halfWidth = screen.width / 4;
+    var halfHeight = screen.height / 2;
+    // Viewport center, measured from left lens position.
+    var centerX = viewer.lenses.separation / 2 - halfWidth;
+    var centerY = -VerticalLensOffset();
+    var centerZ = viewer.lenses.screenDistance;
+    // Tan-angles of the viewport edges, as seen through the lens.
+    var screenLeft = distort(viewer.distortion, (centerX - halfWidth) / centerZ);
+    var screenTop = distort(viewer.distortion, (centerY + halfHeight) / centerZ);
+    var screenRight = distort(viewer.distortion, (centerX + halfWidth) / centerZ);
+    var screenBottom = distort(viewer.distortion, (centerY - halfHeight) / centerZ);
+    // Compare the two sets of tan-angles and take the value closer to zero on each side.
+    result[0] = Math.max(fovLeft, screenLeft);
+    result[1] = Math.min(fovTop, screenTop);
+    result[2] = Math.min(fovRight, screenRight);
+    result[3] = Math.max(fovBottom, screenBottom);
+  }
+
+  // Calculates the tan-angles from the maximum FOV for the left eye for the
+  // current device and screen parameters, assuming no lenses.
+  function GetLeftEyeNoLensTanAngles(result) {
+    // Tan-angles from the max FOV.
+    var fovLeft = distort(viewer.inverse, Math.tan(-viewer.maxFOV.outer * (Math.PI / 180)));
+    var fovTop = distort(viewer.inverse, Math.tan(viewer.maxFOV.upper * (Math.PI / 180)));
+    var fovRight = distort(viewer.inverse, Math.tan(viewer.maxFOV.inner * (Math.PI / 180)));
+    var fovBottom = distort(viewer.inverse, Math.tan(-viewer.maxFOV.lower * (Math.PI / 180)));
+    // Viewport size.
+    var halfWidth = screen.width / 4;
+    var halfHeight = screen.height / 2;
+    // Viewport center, measured from left lens position.
+    var centerX = viewer.lenses.separation / 2 - halfWidth;
+    var centerY = -VerticalLensOffset();
+    var centerZ = viewer.lenses.screenDistance;
+    // Tan-angles of the viewport edges, as seen through the lens.
+    var screenLeft = (centerX - halfWidth) / centerZ;
+    var screenTop = (centerY + halfHeight) / centerZ;
+    var screenRight = (centerX + halfWidth) / centerZ;
+    var screenBottom = (centerY - halfHeight) / centerZ;
+    // Compare the two sets of tan-angles and take the value closer to zero on each side.
+    result[0] = Math.max(fovLeft, screenLeft);
+    result[1] = Math.min(fovTop, screenTop);
+    result[2] = Math.min(fovRight, screenRight);
+    result[3] = Math.max(fovBottom, screenBottom);
+  }
+
+  // Calculates the screen rectangle visible from the left eye for the
+  // current device and screen parameters.
+  function GetLeftEyeVisibleScreenRect(undistortedFrustum, rect) {
+    var dist = viewer.lenses.screenDistance;
+    var eyeX = (screen.width - viewer.lenses.separation) / 2;
+    var eyeY = VerticalLensOffset() + screen.height / 2;
+    var left = (undistortedFrustum[0] * dist + eyeX) / screen.width;
+    var top = (undistortedFrustum[1] * dist + eyeY) / screen.height;
+    var right = (undistortedFrustum[2] * dist + eyeX) / screen.width;
+    var bottom = (undistortedFrustum[3] * dist + eyeY) / screen.height;
+    rect.x = left;
+    rect.y = bottom;
+    rect.width = right - left;
+    rect.height = top - bottom;
+  }
+
+  function GetMaxRadius(tanAngleRect) {
+    var x = Math.max(Math.abs(tanAngleRect[0]), Math.abs(tanAngleRect[2]));
+    var y = Math.max(Math.abs(tanAngleRect[1]), Math.abs(tanAngleRect[3]));
+    return Math.sqrt(x * x + y * y);
+  }
+
+  // Solves a small linear equation via destructive gaussian
+  // elimination and back substitution.  This isn't generic numeric
+  // code, it's just a quick hack to work with the generally
+  // well-behaved symmetric matrices for least-squares fitting.
+  // Not intended for reuse.
+  //
+  // @param a Input positive definite symmetrical matrix. Destroyed
+  //     during calculation.
+  // @param y Input right-hand-side values. Destroyed during calculation.
+  // @return Resulting x value vector.
+  //
+  function solveLinear(a, y) {
+    var n = a.length;
+
+    // Gaussian elimination (no row exchange) to triangular matrix.
+    // The input matrix is a A^T A product which should be a positive
+    // definite symmetrical matrix, and if I remember my linear
+    // algebra right this implies that the pivots will be nonzero and
+    // calculations sufficiently accurate without needing row
+    // exchange.
+    for (var j = 0; j < n - 1; ++j) {
+      for (var k = j + 1; k < n; ++k) {
+        var p = a[k][j] / a[j][j];
+        for (var i = j + 1; i < n; ++i) {
+          a[k][i] -= p * a[j][i];
+        }
+        y[k] -= p * y[j];
+      }
+    }
+    // From this point on, only the matrix elements a[j][i] with i>=j are
+    // valid. The elimination doesn't fill in eliminated 0 values.
+
+    var x = [];
+    for (var i = 0; i < n; i++) x.push(0);
+
+    // Back substitution.
+    for (var j = n - 1; j >= 0; --j) {
+      var v = y[j];
+      for (var i = j + 1; i < n; ++i) {
+        v -= a[j][i] * x[i];
+      }
+      x[j] = v / a[j][j];
+    }
+
+    return x;
+  }
+
+  // Solves a least-squares matrix equation.  Given the equation A * x = y, calculate the
+  // least-square fit x = inverse(A * transpose(A)) * transpose(A) * y.  The way this works
+  // is that, while A is typically not a square matrix (and hence not invertible), A * transpose(A)
+  // is always square.  That is:
+  //   A * x = y
+  //   transpose(A) * (A * x) = transpose(A) * y   <- multiply both sides by transpose(A)
+  //   (transpose(A) * A) * x = transpose(A) * y   <- associativity
+  //   x = inverse(transpose(A) * A) * transpose(A) * y  <- solve for x
+  // Matrix A's row count (first index) must match y's value count.  A's column count (second index)
+  // determines the length of the result vector x.
+  function solveLeastSquares(matA, vecY) {
+    var numSamples = matA.length;
+    var numCoefficients = matA[0].length;
+    if (numSamples != vecY.length) {
+      throw new Error("Matrix / vector dimension mismatch");
+    }
+
+    // Calculate transpose(A) * A
+    var matATA = [];
+    for (var j = 0; j < numCoefficients; ++j) {
+      var row = [];
+      for (var k = 0; k < numCoefficients; ++k) {
+        var sum = 0;
+        for (var i = 0; i < numSamples; ++i) {
+          sum += matA[i][j] * matA[i][k];
+        }
+        row.push(sum);
+      }
+      matATA.push(row);
+    }
+
+    // Calculate transpose(A) * y
+    var vecATY = [];
+    for (var j = 0; j < numCoefficients; ++j) {
+      var sum = 0;
+      for (var i = 0; i < numSamples; ++i) {
+        sum += matA[i][j] * vecY[i];
+      }
+      vecATY.push(sum);
+    }
+
+    // Now solve (A * transpose(A)) * x = transpose(A) * y.
+    return solveLinear(matATA, vecATY);
+  }
+
+  // Calculates an approximate inverse to the given radial distortion parameters.
+  function ApproximateInverse(coef) {
+    var maxRadius = 1;
+    var numSamples = 100;
+    var numCoefficients = 6;
+
+    // R + K1*R^3 + K2*R^5 = r, with R = rp = distort(r)
+    // Repeating for numSamples:
+    //   [ R0^3, R0^5 ] * [ K1 ] = [ r0 - R0 ]
+    //   [ R1^3, R1^5 ]   [ K2 ]   [ r1 - R1 ]
+    //   [ R2^3, R2^5 ]            [ r2 - R2 ]
+    //   [ etc... ]                [ etc... ]
+    // That is:
+    //   matA * [K1, K2] = y
+    // Solve:
+    //   [K1, K2] = inverse(transpose(matA) * matA) * transpose(matA) * y
+    var matA = [];
+    var vecY = [];
+    for (var i = 0; i < numSamples; ++i) {
+      var r = maxRadius * (i + 1) / numSamples;
+      var rp = distort(coef, r);
+      var v = rp;
+      var row = [];
+      for (var j = 0; j < numCoefficients; ++j) {
+        v *= rp * rp;
+        row.push(v);
+      }
+      matA.push(row);
+      vecY.push(r - rp);
+    }
+    return solveLeastSquares(matA, vecY);
+  }
+
+  // Parameters for an iPhone 6 device.
+  var screen = {
+    width: 0.104,
+    height: 0.058,
+    border: 0.005,
+  };
+
+  // Raw protocol buffer data from the Google Cardboard QR code URL:
+  /*
+  vendor: "Google"
+  model: "Cardboard"
+  screen_to_lens_distance: 0.0393
+  inter_lens_distance: 0.0639
+  left_eye_field_of_view_angles: 60
+  left_eye_field_of_view_angles: 60
+  left_eye_field_of_view_angles: 60
+  left_eye_field_of_view_angles: 60
+  tray_to_lens_distance: 0.035
+  distortion_coefficients: 0.33582565
+  distortion_coefficients: 0.5534879
+  has_magnet: false
+  vertical_alignment: BOTTOM
+  primary_button: INDIRECT_TOUCH
+  */
+  var viewer = {
+    lenses: {
+      separation: 0.0639,
+      offset: 0.035,
+      screenDistance: 0.0393,
+      alignment: 1,
+    },
+    maxFOV: {
+      outer: 60,
+      inner: 60,
+      upper: 60,
+      lower: 60,
+    },
+    distortion: [0.33582565, 0.5534879],
+    inverse: ApproximateInverse([0.33582565, 0.5534879]),
+  };
+
+  var lensFrustum = [0, 0, 0, 0];
+  var noLensFrustum = [0, 0, 0, 0];
+  var viewport = {x: 0, y: 0, width: 0, height: 0};
+
+  GetLeftEyeVisibleTanAngles(lensFrustum);
+  GetLeftEyeNoLensTanAngles(noLensFrustum);
+  GetLeftEyeVisibleScreenRect(noLensFrustum, viewport);
+
+  cardboardUniforms = {
+    lensFrustum: { type: 'v4', value: new THREE.Vector4(lensFrustum[0], lensFrustum[1], lensFrustum[2], lensFrustum[3]) },
+    noLensFrustum: { type: 'v4', value: new THREE.Vector4(noLensFrustum[0], noLensFrustum[1], noLensFrustum[2], noLensFrustum[3]) },
+    viewport: { type: 'v4', value: new THREE.Vector4(viewport.x, viewport.y, viewport.width, viewport.height) },
+    distortion: { type: 'v2', value: new THREE.Vector2(viewer.distortion[0], viewer.distortion[1]) },
+  };
+})();
 
 (function() {
   var scene = new THREE.Scene();
   var sceneScreen = new THREE.Scene();
-
-  var cameraLeft = new THREE.PerspectiveCamera(75, innerWidth / 2 / innerHeight, 0.1, 1000);
-  var cameraRight = new THREE.PerspectiveCamera(75, innerWidth / 2 / innerHeight, 0.1, 1000);
   var cameraScreen = new THREE.OrthographicCamera(-1, 1, -1, 1, -1, 1);
 
+  var cameraLeft = new THREE.Camera();
+  var cameraRight = new THREE.Camera();
+  var cameraDistance = 50;
+
+  var lensFrustum = cardboardUniforms.lensFrustum.value;
+  cameraLeft.projectionMatrix.makeFrustum(lensFrustum.x, lensFrustum.z, lensFrustum.w, lensFrustum.y, 1, 1000);
+  cameraRight.projectionMatrix.makeFrustum(lensFrustum.x, lensFrustum.z, lensFrustum.w, lensFrustum.y, 1, 1000);
+  cameraRight.projectionMatrix.elements[8] *= -1;
+
   var renderer = new THREE.WebGLRenderer();
-  renderer.setSize(innerWidth, innerHeight);
   renderer.autoClear = false;
+  renderer.domElement.style.width = '100%';
+  renderer.domElement.style.height = '100%';
   document.body.appendChild(renderer.domElement);
 
   var loader = new THREE.TextureLoader();
@@ -25,7 +399,14 @@
 
         var quad = new THREE.Mesh(
           new THREE.PlaneBufferGeometry(2, 2, 1),
-          new THREE.MeshBasicMaterial({color: 0xFFFFFF, map: rtTexture.texture}));
+          new THREE.RawShaderMaterial({
+            uniforms: Object.assign({}, cardboardUniforms, {
+              texture: { type: 't', value: rtTexture.texture },
+            }),
+            vertexShader: document.querySelector('#vertex-shader').textContent,
+            fragmentShader: document.querySelector('#fragment-shader').textContent,
+          })
+        );
         quad.rotation.x = Math.PI;
         sceneScreen.add(quad);
 
@@ -69,26 +450,149 @@
         var cube = new THREE.Mesh(geometry, material);
         scene.add(cube);
 
-        cameraLeft.position.z = 50;
-        cameraRight.position.z = 50;
+        var previousTime = performance.now();
+        var alpha = 0;
+        var beta = 0;
+        var gamma = 0;
+        var alphaRate = 0;
+        var betaRate = 0;
+        var gammaRate = 0;
+
+        // https://w3c.github.io/deviceorientation/spec-source-orientation.html
+        function loadDeviceOrientation() {
+          var orientation = window.orientation || 0;
+
+          var cX = Math.cos(beta * (Math.PI / 180));
+          var cY = Math.cos(gamma * (Math.PI / 180));
+          var cZ = Math.cos(alpha * (Math.PI / 180));
+
+          var sX = Math.sin(beta * (Math.PI / 180));
+          var sY = Math.sin(gamma * (Math.PI / 180));
+          var sZ = Math.sin(alpha * (Math.PI / 180));
+
+          var m11 = cZ * cY - sZ * sX * sY;
+          var m12 = -cX * sZ;
+          var m13 = cY * sZ * sX + cZ * sY;
+
+          var m21 = cY * sZ + cZ * sX * sY;
+          var m22 = cZ * cX;
+          var m23 = sZ * sY - cZ * cY * sX;
+
+          var m31 = -cX * sY;
+          var m32 = sX;
+          var m33 = cX * cY;
+
+          var rc = Math.cos(orientation * (Math.PI / 180));
+          var rs = Math.sin(orientation * (Math.PI / 180));
+
+          cameraMatrix.set(
+            0, -1, 0, 0,
+            0, 0, 1, 0,
+            -1, 0, 0, 0,
+            0, 0, 0, 1
+          ).multiply(temporaryMatrix.set(
+            rc * m11 - rs * m12, rs * m11 + rc * m12, m13, 0,
+            rc * m21 - rs * m22, rs * m21 + rc * m22, m23, 0,
+            rc * m31 - rs * m32, rs * m31 + rc * m32, m33, 0,
+            0, 0, 0, 1
+          ));
+        }
+
+        var cameraMatrix = new THREE.Matrix4();
+        var temporaryMatrix = new THREE.Matrix4();
+        var screenWidth = 1;
+        var screenHeight = 1;
+        var delta = new THREE.Vector3();
 
         function render() {
-          var leftWidth = innerWidth / 2 | 0;
+          var leftWidth = screenWidth / 2 | 0;
+
+          var currentTime = performance.now();
+          var seconds = (currentTime - previousTime) / 1000;
+          previousTime = currentTime;
+
+          // Try to render a frame ahead due to lag inherent in the pipeline
+          alpha += alphaRate * seconds;
+          beta += betaRate * seconds;
+          gamma += gammaRate * seconds;
+
+          loadDeviceOrientation();
+
+          cameraLeft.quaternion.setFromRotationMatrix(cameraMatrix);
+          cameraRight.quaternion.setFromRotationMatrix(cameraMatrix);
+
+          cameraLeft.position.set(cameraMatrix.elements[8], cameraMatrix.elements[9], cameraMatrix.elements[10]).multiplyScalar(cameraDistance);
+          cameraRight.position.set(cameraMatrix.elements[8], cameraMatrix.elements[9], cameraMatrix.elements[10]).multiplyScalar(cameraDistance);
+
+          delta.set(cameraMatrix.elements[0], cameraMatrix.elements[1], cameraMatrix.elements[2]).multiplyScalar(2.5);
+          // delta.set(cameraMatrix.elements[0], cameraMatrix.elements[1], cameraMatrix.elements[2]).multiplyScalar(alpha);
+          // debug.textContent = alpha;
+          cameraLeft.position.sub(delta);
+          cameraRight.position.add(delta);
 
           requestAnimationFrame(render);
 
-          rtTexture.viewport = new THREE.Vector4(0, 0, leftWidth, innerHeight);
+          rtTexture.viewport = new THREE.Vector4(0, 0, leftWidth, screenHeight);
           renderer.render(scene, cameraLeft, rtTexture, true);
 
-          rtTexture.viewport = new THREE.Vector4(leftWidth, 0, innerWidth - leftWidth, innerHeight);
+          rtTexture.viewport = new THREE.Vector4(leftWidth, 0, screenWidth - leftWidth, screenHeight);
           renderer.render(scene, cameraRight, rtTexture, false);
 
-          renderer.setViewport(0, 0, innerWidth, innerHeight);
+          renderer.setViewport(0, 0, screenWidth, screenHeight);
           renderer.render(sceneScreen, cameraScreen, null, true);
-
-          cube.rotation.x += 0.001;
-          cube.rotation.y += 0.01;
         }
+
+        ondevicemotion = function(e) {
+          var rotationRate = e.rotationRate;
+          if (rotationRate) {
+            alphaRate = rotationRate.alpha;
+            betaRate = rotationRate.beta;
+            gammaRate = rotationRate.gamma;
+          }
+        };
+
+        ondeviceorientation = function(e) {
+          alpha = e.alpha;
+          beta = e.beta;
+          gamma = e.gamma;
+        };
+
+        ontouchstart = function(e) {
+          e.preventDefault();
+        };
+
+        onmousedown = function(e) {
+          e.preventDefault();
+
+          var oldX = e.pageX;
+          var oldY = e.pageY;
+
+          onmousemove = function(e) {
+            alpha -= e.pageX - oldX;
+            beta -= e.pageY - oldY;
+
+            alpha -= Math.floor(alpha / 360) * 360;
+            beta = Math.max(0, Math.min(beta, 180));
+
+            oldX = e.pageX;
+            oldY = e.pageY;
+          };
+
+          onmouseup = function(e) {
+            onmousemove = null;
+            onmouseup = null;
+          };
+        };
+
+        onresize = function() {
+          var ratio = window.devicePixelRatio || 1;
+          screenWidth = Math.round(innerWidth * ratio);
+          screenHeight = Math.round(innerHeight * ratio);
+          renderer.setSize(screenWidth, screenHeight, false);
+          rtTexture.setSize(screenWidth, screenHeight);
+        };
+
+        onresize();
 
         render();
       });
