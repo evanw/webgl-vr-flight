@@ -92,7 +92,7 @@ void main() {
 
   vec3 lightDirection = vec3(0, 1, 0);
   float diffuse = max(0.0, dot(surfaceNormal, lightDirection));
-  float ambient = pow(dot(normal, surfaceNormal), 6.0);
+  float ambient = pow(dot(normal, surfaceNormal), 16.0);
   float light = mix(ambient, diffuse, 0.75);
   gl_FragColor = vec4(vec3(0.75 * light), 1);
 }
@@ -617,9 +617,13 @@ void main() {
 
           var cameraMatrix = new THREE.Matrix4();
           var temporaryMatrix = new THREE.Matrix4();
+          var temporaryQuaternion = new THREE.Quaternion();
           var screenWidth = 1;
           var screenHeight = 1;
           var delta = new THREE.Vector3();
+
+          var currentPitch = 0;
+          var currentRoll = 0;
 
           ship.position.set(0, 100, 0);
 
@@ -634,10 +638,19 @@ void main() {
             var up = !!keyState[38];
             var right = !!keyState[39];
             var down = !!keyState[40];
-            ship.rotation.y += (left - right) * seconds;
-            var speed = (up - down) * 50 * seconds;
-            ship.position.x -= Math.cos(ship.rotation.y) * speed;
-            ship.position.z += Math.sin(ship.rotation.y) * speed;
+
+            // Thrust
+            ship.position.add(delta.set(-50 * seconds, 0, 0).applyQuaternion(ship.quaternion));
+
+            // Pitch
+            var targetPitch = Math.PI / 4 * (up - down);
+            currentPitch += (targetPitch - currentPitch) * (1 - Math.pow(1 / 4, seconds));
+            ship.quaternion.multiply(temporaryQuaternion.setFromAxisAngle(delta.set(0, 0, 1), currentPitch * seconds));
+
+            // Roll
+            var targetRoll = Math.PI / 4 * (left - right);
+            currentRoll += (targetRoll - currentRoll) * (1 - Math.pow(1 / 4, seconds));
+            ship.quaternion.multiply(temporaryQuaternion.setFromAxisAngle(delta.set(1, 0, 0), currentRoll * seconds));
 
             // Try to render a frame ahead due to lag inherent in the pipeline
             alpha += alphaRate * seconds;
