@@ -539,9 +539,9 @@ void main() {
           for (var i = 0; i < position.length; i += 3) {
             var x = position[i];
             var y = position[i + 1];
-            position[i] = x * 1000;
-            position[i + 1] = getZ(x * 5, y * 5, 4) * 100;
-            position[i + 2] = -y * 1000;
+            position[i] = x * 2000;
+            position[i + 1] = getZ(x * 10, y * 10, 4) * 100;
+            position[i + 2] = -y * 2000;
           }
           terrainGeometry.computeVertexNormals();
           for (var i = 0; i < position.length; i += 3) {
@@ -617,15 +617,21 @@ void main() {
 
           var cameraMatrix = new THREE.Matrix4();
           var temporaryMatrix = new THREE.Matrix4();
+          var temporaryVector = new THREE.Vector3();
           var temporaryQuaternion = new THREE.Quaternion();
           var screenWidth = 1;
           var screenHeight = 1;
-          var delta = new THREE.Vector3();
 
-          var currentPitch = 0;
-          var currentRoll = 0;
+          var velocity = new THREE.Vector3();
+          var acceleration = new THREE.Vector3();
+          var angularVelocity = new THREE.Quaternion();
+          var angularAcceleration = new THREE.Quaternion();
+          var normalizedVelocity = new THREE.Vector3();
+          var sidewaysDirection = new THREE.Vector3();
+          var forwardDirection = new THREE.Vector3();
+          var upDirection = new THREE.Vector3();
 
-          ship.position.set(0, 100, 0);
+          ship.position.set(0, 200, 0);
 
           function render() {
             var leftWidth = screenWidth / 2 | 0;
@@ -639,18 +645,55 @@ void main() {
             var right = !!keyState[39];
             var down = !!keyState[40];
 
-            // Thrust
-            ship.position.add(delta.set(-50 * seconds, 0, 0).applyQuaternion(ship.quaternion));
+            var n = 10;
+            var t = seconds / n;
 
-            // Pitch
-            var targetPitch = Math.PI / 4 * (up - down);
-            currentPitch += (targetPitch - currentPitch) * (1 - Math.pow(1 / 4, seconds));
-            ship.quaternion.multiply(temporaryQuaternion.setFromAxisAngle(delta.set(0, 0, 1), currentPitch * seconds));
+            for (var i = 0; i < n; i++) {
+              // Reset acceleration for this frame
+              acceleration.set(0, 0, 0);
+              angularAcceleration.set(0, 0, 0, 1);
 
-            // Roll
-            var targetRoll = Math.PI / 4 * (left - right);
-            currentRoll += (targetRoll - currentRoll) * (1 - Math.pow(1 / 4, seconds));
-            ship.quaternion.multiply(temporaryQuaternion.setFromAxisAngle(delta.set(1, 0, 0), currentRoll * seconds));
+              // Helper variables
+              sidewaysDirection.set(0, 0, 1).applyQuaternion(ship.quaternion);
+              forwardDirection.set(-1, 0, 0).applyQuaternion(ship.quaternion);
+              upDirection.set(0, 1, 0).applyQuaternion(ship.quaternion);
+              normalizedVelocity.copy(velocity).normalize();
+
+              // Thrust
+              acceleration.add(temporaryVector.copy(forwardDirection).multiplyScalar(200));
+
+              // Gravity
+              acceleration.add(temporaryVector.set(0, -250, 0));
+
+              // Lift
+              acceleration.add(temporaryVector.copy(upDirection).multiplyScalar(0.001 * normalizedVelocity.dot(forwardDirection) * velocity.lengthSq()));
+              acceleration.add(temporaryVector.copy(upDirection).multiplyScalar(0.01 * normalizedVelocity.dot(upDirection) * velocity.lengthSq()));
+
+              // "Compensation" for lift differential across the two wings
+              angularAcceleration.multiply(temporaryQuaternion.setFromAxisAngle(temporaryVector.set(0, 0, 1), 0.00005 * normalizedVelocity.dot(sidewaysDirection) * velocity.lengthSq()));
+              angularAcceleration.multiply(temporaryQuaternion.setFromAxisAngle(temporaryVector.set(-1, 0, 0), 0.0001 * normalizedVelocity.dot(sidewaysDirection) * velocity.lengthSq()));
+              angularAcceleration.multiply(temporaryQuaternion.setFromAxisAngle(temporaryVector.set(0, 1, 0), 0.0001 * normalizedVelocity.dot(sidewaysDirection) * velocity.lengthSq()));
+
+              // Directional drag
+              acceleration.add(temporaryVector.copy(sidewaysDirection).multiplyScalar(-0.05 * normalizedVelocity.dot(sidewaysDirection) * velocity.lengthSq()));
+              acceleration.add(temporaryVector.copy(forwardDirection).multiplyScalar(-0.01 * normalizedVelocity.dot(forwardDirection) * velocity.lengthSq()));
+              acceleration.add(temporaryVector.copy(upDirection).multiplyScalar(-0.1 * normalizedVelocity.dot(upDirection) * velocity.lengthSq()));
+
+              // Pitch and roll
+              angularAcceleration.multiply(temporaryQuaternion.setFromAxisAngle(temporaryVector.set(0, 0, 1), Math.PI / 4 * (up - down)));
+              angularAcceleration.multiply(temporaryQuaternion.setFromAxisAngle(temporaryVector.set(1, 0, 0), Math.PI / 4 * (left - right)));
+
+              // Update velocity
+              velocity.add(temporaryVector.copy(acceleration).multiplyScalar(t));
+              angularVelocity.multiply(temporaryQuaternion.set(0, 0, 0, 1).slerp(angularAcceleration, t));
+
+              // Update position
+              ship.position.add(temporaryVector.copy(velocity).multiplyScalar(t));
+              ship.quaternion.multiply(temporaryQuaternion.set(0, 0, 0, 1).slerp(angularVelocity, t));
+
+              // Angular drag
+              angularVelocity.slerp(temporaryQuaternion.set(0, 0, 0, 1), 1 - Math.pow(0.25, t));
+            }
 
             // Try to render a frame ahead due to lag inherent in the pipeline
             alpha += alphaRate * seconds;
@@ -662,12 +705,17 @@ void main() {
             cameraLeft.quaternion.setFromRotationMatrix(cameraMatrix);
             cameraRight.quaternion.setFromRotationMatrix(cameraMatrix);
 
+            // // Rotate with the ship => nausea
+            // cameraLeft.quaternion.multiplyQuaternions(ship.quaternion, cameraLeft.quaternion);
+            // cameraRight.quaternion.multiplyQuaternions(ship.quaternion, cameraRight.quaternion);
+            // cameraMatrix.makeRotationFromQuaternion(cameraLeft.quaternion);
+
             cameraLeft.position.set(cameraMatrix.elements[8], cameraMatrix.elements[9], cameraMatrix.elements[10]).multiplyScalar(cameraDistance);
             cameraRight.position.set(cameraMatrix.elements[8], cameraMatrix.elements[9], cameraMatrix.elements[10]).multiplyScalar(cameraDistance);
 
-            delta.set(cameraMatrix.elements[0], cameraMatrix.elements[1], cameraMatrix.elements[2]).multiplyScalar(2.5);
-            cameraLeft.position.add(ship.position).sub(delta);
-            cameraRight.position.add(ship.position).add(delta);
+            temporaryVector.set(cameraMatrix.elements[0], cameraMatrix.elements[1], cameraMatrix.elements[2]).multiplyScalar(2.5);
+            cameraLeft.position.add(ship.position).sub(temporaryVector);
+            cameraRight.position.add(ship.position).add(temporaryVector);
 
             requestAnimationFrame(render);
 
