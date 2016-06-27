@@ -1,7 +1,7 @@
 <body style="margin:0;overflow:hidden;"></body>
 <script src="three.min.js"></script>
 <script src="space_frigate_6.js"></script>
-<script type="text/plain" id="vertex-shader">
+<script type="text/plain" id="vr-vertex-shader">
 
 attribute vec3 position;
 varying vec2 uv;
@@ -12,7 +12,7 @@ void main() {
 }
 
 </script>
-<script type="text/plain" id="fragment-shader">
+<script type="text/plain" id="vr-fragment-shader">
 
 precision highp float;
 
@@ -54,6 +54,47 @@ void main() {
   vec3 info = uv.x < 0.5 ? viewer(uv.x, uv.y) : viewer(1.0 - uv.x, uv.y) * vec3(-1, 1, 1);
   vec2 coord = vec2(uv.x < 0.5 ? info.x * 0.5 : info.x * 0.5 + 1.0, info.y);
   gl_FragColor = vec4(texture2D(texture, coord).rgb * info.z, 1);
+}
+
+</script>
+<script type="text/plain" id="terrain-vertex-shader">
+
+uniform mat4 projectionMatrix;
+uniform mat4 modelViewMatrix;
+uniform mat3 normalMatrix;
+attribute vec3 position;
+attribute vec3 normal;
+varying vec3 vNormal;
+varying vec2 vUv;
+
+void main() {
+  vUv = position.xz;
+  vNormal = normal;
+  gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1);
+}
+
+</script>
+<script type="text/plain" id="terrain-fragment-shader">
+
+precision mediump float;
+
+uniform sampler2D texture;
+varying vec3 vNormal;
+varying vec2 vUv;
+
+void main() {
+  vec2 coord = vUv * (1.0 / 64.0);
+  vec3 normal = normalize(vNormal);
+  vec3 tangent = normalize(cross(normal, cross(vec3(1, 0, 0), normal)));
+  vec3 bitangent = normalize(cross(normal, cross(vec3(0, 1, 0), normal)));
+  vec3 lookup = texture2D(texture, coord).xyz * 2.0 - 1.0;
+  vec3 surfaceNormal = mat3(tangent, bitangent, normal) * lookup;
+
+  vec3 lightDirection = vec3(0, 1, 0);
+  float diffuse = max(0.0, dot(surfaceNormal, lightDirection));
+  float ambient = pow(dot(normal, surfaceNormal), 6.0);
+  float light = mix(ambient, diffuse, 0.75);
+  gl_FragColor = vec4(vec3(0.75 * light), 1);
 }
 
 </script>
@@ -380,8 +421,8 @@ void main() {
   var cameraDistance = 50;
 
   var lensFrustum = cardboardUniforms.lensFrustum.value;
-  cameraLeft.projectionMatrix.makeFrustum(lensFrustum.x, lensFrustum.z, lensFrustum.w, lensFrustum.y, 1, 1000);
-  cameraRight.projectionMatrix.makeFrustum(lensFrustum.x, lensFrustum.z, lensFrustum.w, lensFrustum.y, 1, 1000);
+  cameraLeft.projectionMatrix.makeFrustum(lensFrustum.x, lensFrustum.z, lensFrustum.w, lensFrustum.y, 1, 10000);
+  cameraRight.projectionMatrix.makeFrustum(lensFrustum.x, lensFrustum.z, lensFrustum.w, lensFrustum.y, 1, 10000);
   cameraRight.projectionMatrix.elements[8] *= -1;
 
   var renderer = new THREE.WebGLRenderer();
@@ -394,207 +435,335 @@ void main() {
   loader.load('space_frigate_6_color.png', function(colorTexture) {
     loader.load('space_frigate_6_specular.png', function(specularTexture) {
       loader.load('space_frigate_6_illumination.png', function(emissiveTexture) {
-        var rtTexture = new THREE.WebGLRenderTarget(innerWidth, innerHeight,
-          {minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, format: THREE.RGBFormat});
+        loader.load('terrain.png', function(terrainTexture) {
+          terrainTexture.wrapS = THREE.RepeatWrapping;
+          terrainTexture.wrapT = THREE.RepeatWrapping;
 
-        var quad = new THREE.Mesh(
-          new THREE.PlaneBufferGeometry(2, 2, 1),
-          new THREE.RawShaderMaterial({
-            uniforms: Object.assign({}, cardboardUniforms, {
-              texture: { type: 't', value: rtTexture.texture },
-            }),
-            vertexShader: document.querySelector('#vertex-shader').textContent,
-            fragmentShader: document.querySelector('#fragment-shader').textContent,
-          })
-        );
-        quad.rotation.x = Math.PI;
-        sceneScreen.add(quad);
+          var rtTexture = new THREE.WebGLRenderTarget(innerWidth, innerHeight,
+            {minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, format: THREE.RGBFormat});
 
-        var light = new THREE.AmbientLight(0xFFFFFF, 0.15);
-        scene.add(light);
+          var quad = new THREE.Mesh(
+            new THREE.PlaneBufferGeometry(2, 2, 1),
+            new THREE.RawShaderMaterial({
+              uniforms: Object.assign({}, cardboardUniforms, {
+                texture: { type: 't', value: rtTexture.texture },
+              }),
+              vertexShader: document.querySelector('#vr-vertex-shader').textContent,
+              fragmentShader: document.querySelector('#vr-fragment-shader').textContent,
+            })
+          );
+          quad.rotation.x = Math.PI;
+          sceneScreen.add(quad);
 
-        var directionalLight = new THREE.DirectionalLight(0xFFFFFF, 0.85);
-        directionalLight.position.set(0, 1, 0);
-        scene.add(directionalLight);
+          var light = new THREE.AmbientLight(0xFFFFFF, 0.15);
+          scene.add(light);
 
-        var geometry = new THREE.Geometry();
-        space_frigate_6.vertices.forEach(function(v) {
-          geometry.vertices.push(new THREE.Vector3(v[0], v[1], v[2]));
-        });
-        space_frigate_6.faces.forEach(function(f) {
-          geometry.faces.push(new THREE.Face3(
-            f[0][0] - 1,
-            f[1][0] - 1,
-            f[2][0] - 1
-          ));
-          var c0 = space_frigate_6.coords[f[0][1] - 1];
-          var c1 = space_frigate_6.coords[f[1][1] - 1];
-          var c2 = space_frigate_6.coords[f[2][1] - 1];
-          geometry.faceVertexUvs[0].push([
-            new THREE.Vector2(c0[0], c0[1]),
-            new THREE.Vector2(c1[0], c1[1]),
-            new THREE.Vector2(c2[0], c2[1]),
-          ]);
-        });
-        geometry.computeFaceNormals();
-        geometry.computeBoundingSphere();
+          var directionalLight = new THREE.DirectionalLight(0xFFFFFF, 0.85);
+          directionalLight.position.set(0, 1, 0);
+          scene.add(directionalLight);
 
-        var material = new THREE.MeshPhongMaterial({
-          map: colorTexture,
-          shininess: 64,
-          specular: 0xFFFFFF,
-          specularMap: specularTexture,
-          emissive: 0xFFFFFF,
-          emissiveMap: emissiveTexture,
-        });
-        var cube = new THREE.Mesh(geometry, material);
-        scene.add(cube);
+          var shipGeometry = new THREE.Geometry();
+          space_frigate_6.vertices.forEach(function(v) {
+            shipGeometry.vertices.push(new THREE.Vector3(v[0], v[1], v[2]));
+          });
+          space_frigate_6.faces.forEach(function(f) {
+            shipGeometry.faces.push(new THREE.Face3(
+              f[0][0] - 1,
+              f[1][0] - 1,
+              f[2][0] - 1
+            ));
+            var c0 = space_frigate_6.coords[f[0][1] - 1];
+            var c1 = space_frigate_6.coords[f[1][1] - 1];
+            var c2 = space_frigate_6.coords[f[2][1] - 1];
+            shipGeometry.faceVertexUvs[0].push([
+              new THREE.Vector2(c0[0], c0[1]),
+              new THREE.Vector2(c1[0], c1[1]),
+              new THREE.Vector2(c2[0], c2[1]),
+            ]);
+          });
+          shipGeometry.computeFaceNormals();
+          shipGeometry.computeBoundingSphere();
 
-        var previousTime = performance.now();
-        var alpha = 0;
-        var beta = 0;
-        var gamma = 0;
-        var alphaRate = 0;
-        var betaRate = 0;
-        var gammaRate = 0;
+          var ship = new THREE.Mesh(shipGeometry, new THREE.MeshPhongMaterial({
+            map: colorTexture,
+            shininess: 64,
+            specular: 0xFFFFFF,
+            specularMap: specularTexture,
+            emissive: 0xFFFFFF,
+            emissiveMap: emissiveTexture,
+          }));
+          scene.add(ship);
 
-        // https://w3c.github.io/deviceorientation/spec-source-orientation.html
-        function loadDeviceOrientation() {
-          var orientation = window.orientation || 0;
-
-          var cX = Math.cos(beta * (Math.PI / 180));
-          var cY = Math.cos(gamma * (Math.PI / 180));
-          var cZ = Math.cos(alpha * (Math.PI / 180));
-
-          var sX = Math.sin(beta * (Math.PI / 180));
-          var sY = Math.sin(gamma * (Math.PI / 180));
-          var sZ = Math.sin(alpha * (Math.PI / 180));
-
-          var m11 = cZ * cY - sZ * sX * sY;
-          var m12 = -cX * sZ;
-          var m13 = cY * sZ * sX + cZ * sY;
-
-          var m21 = cY * sZ + cZ * sX * sY;
-          var m22 = cZ * cX;
-          var m23 = sZ * sY - cZ * cY * sX;
-
-          var m31 = -cX * sY;
-          var m32 = sX;
-          var m33 = cX * cY;
-
-          var rc = Math.cos(orientation * (Math.PI / 180));
-          var rs = Math.sin(orientation * (Math.PI / 180));
-
-          cameraMatrix.set(
-            0, -1, 0, 0,
-            0, 0, 1, 0,
-            -1, 0, 0, 0,
-            0, 0, 0, 1
-          ).multiply(temporaryMatrix.set(
-            rc * m11 - rs * m12, rs * m11 + rc * m12, m13, 0,
-            rc * m21 - rs * m22, rs * m21 + rc * m22, m23, 0,
-            rc * m31 - rs * m32, rs * m31 + rc * m32, m33, 0,
-            0, 0, 0, 1
-          ));
-        }
-
-        var cameraMatrix = new THREE.Matrix4();
-        var temporaryMatrix = new THREE.Matrix4();
-        var screenWidth = 1;
-        var screenHeight = 1;
-        var delta = new THREE.Vector3();
-
-        function render() {
-          var leftWidth = screenWidth / 2 | 0;
-
-          var currentTime = performance.now();
-          var seconds = (currentTime - previousTime) / 1000;
-          previousTime = currentTime;
-
-          // Try to render a frame ahead due to lag inherent in the pipeline
-          alpha += alphaRate * seconds;
-          beta += betaRate * seconds;
-          gamma += gammaRate * seconds;
-
-          loadDeviceOrientation();
-
-          cameraLeft.quaternion.setFromRotationMatrix(cameraMatrix);
-          cameraRight.quaternion.setFromRotationMatrix(cameraMatrix);
-
-          cameraLeft.position.set(cameraMatrix.elements[8], cameraMatrix.elements[9], cameraMatrix.elements[10]).multiplyScalar(cameraDistance);
-          cameraRight.position.set(cameraMatrix.elements[8], cameraMatrix.elements[9], cameraMatrix.elements[10]).multiplyScalar(cameraDistance);
-
-          delta.set(cameraMatrix.elements[0], cameraMatrix.elements[1], cameraMatrix.elements[2]).multiplyScalar(2.5);
-          // delta.set(cameraMatrix.elements[0], cameraMatrix.elements[1], cameraMatrix.elements[2]).multiplyScalar(alpha);
-          // debug.textContent = alpha;
-          cameraLeft.position.sub(delta);
-          cameraRight.position.add(delta);
-
-          requestAnimationFrame(render);
-
-          rtTexture.viewport = new THREE.Vector4(0, 0, leftWidth, screenHeight);
-          renderer.render(scene, cameraLeft, rtTexture, true);
-
-          rtTexture.viewport = new THREE.Vector4(leftWidth, 0, screenWidth - leftWidth, screenHeight);
-          renderer.render(scene, cameraRight, rtTexture, false);
-
-          renderer.setViewport(0, 0, screenWidth, screenHeight);
-          renderer.render(sceneScreen, cameraScreen, null, true);
-        }
-
-        ondevicemotion = function(e) {
-          var rotationRate = e.rotationRate;
-          if (rotationRate) {
-            alphaRate = rotationRate.alpha;
-            betaRate = rotationRate.beta;
-            gammaRate = rotationRate.gamma;
+          function smooth(x) {
+            return 0.5 - 0.5 * Math.cos(x * Math.PI);
           }
-        };
 
-        ondeviceorientation = function(e) {
-          alpha = e.alpha;
-          beta = e.beta;
-          gamma = e.gamma;
-        };
+          function intNoise(x, y, seed) {
+            var n = (x + Math.imul(y, 57) | 0) + Math.imul(seed, 131) | 0;
+            n = (n << 13) ^ n;
+            return 1 - ((Math.imul(n, Math.imul(Math.imul(n, n), 15731) + 789221 | 0) + 1376312589 | 0) & 0x7fffffff) * 0.000000000931322574615478515625;
+          }
 
-        ontouchstart = function(e) {
-          e.preventDefault();
-        };
+          function floatNoise(x, y, seed) {
+            var ix = Math.floor(x);
+            var iy = Math.floor(y);
+            var tx = x - ix;
+            var ty = y - iy;
+            tx = smooth(tx);
+            ty = smooth(ty);
+            var txty = tx * ty;
+            return intNoise(ix, iy, seed) * (1 - ty - tx + txty) +
+                   intNoise(ix + 1, iy, seed) * (tx - txty) +
+                   intNoise(ix + 1, iy + 1, seed) * txty +
+                   intNoise(ix, iy + 1, seed) * (ty - txty);
+          }
 
-        onmousedown = function(e) {
-          e.preventDefault();
+          function octaveNoise(x, y, seed, count, scaleXY, scaleZ) {
+            var z = 0, weightY = 1;
+            for (var i = 0; i < count; i++) {
+              z += floatNoise(x, y, seed) * weightY;
+              weightY *= scaleZ;
+              x *= scaleXY;
+              y *= scaleXY;
+            }
+            return z;
+          }
 
-          var oldX = e.pageX;
-          var oldY = e.pageY;
+          function getZ(x, y, detail) {
+            return octaveNoise(x, y, 0, detail, 2, 0.4);
+          }
 
-          onmousemove = function(e) {
-            alpha -= e.pageX - oldX;
-            beta -= e.pageY - oldY;
+          var terrainGeometry = new THREE.PlaneBufferGeometry(2, 2, 256, 256);
+          var position = terrainGeometry.attributes.position.array;
+          var normal = terrainGeometry.attributes.normal.array;
+          for (var i = 0; i < position.length; i += 3) {
+            var x = position[i];
+            var y = position[i + 1];
+            position[i] = x * 1000;
+            position[i + 1] = getZ(x * 5, y * 5, 4) * 100;
+            position[i + 2] = -y * 1000;
+          }
+          terrainGeometry.computeVertexNormals();
+          for (var i = 0; i < position.length; i += 3) {
+            var x = position[i];
+            var y = position[i + 1];
+            var z = position[i + 2];
+            var nx = normal[i];
+            var ny = normal[i + 1];
+            var nz = normal[i + 2];
 
-            alpha -= Math.floor(alpha / 360) * 360;
-            beta = Math.max(0, Math.min(beta, 180));
+            // Make mountains more peaked
+            position[i]     = x - 20 * nx;
+            position[i + 1] = y - 20 * (ny - 1);
+            position[i + 2] = z - 20 * nz;
+          }
+          terrainGeometry.computeBoundingSphere();
+          var terrain = new THREE.Mesh(terrainGeometry, new THREE.RawShaderMaterial({
+            uniforms: {
+              texture: { type: 't', value: terrainTexture },
+            },
+            vertexShader: document.querySelector('#terrain-vertex-shader').textContent,
+            fragmentShader: document.querySelector('#terrain-fragment-shader').textContent,
+          }));
+          scene.add(terrain);
 
-            oldX = e.pageX;
-            oldY = e.pageY;
+          var previousTime = performance.now();
+          var alpha = 0;
+          var beta = 0;
+          var gamma = 0;
+          var alphaRate = 0;
+          var betaRate = 0;
+          var gammaRate = 0;
+
+          // https://w3c.github.io/deviceorientation/spec-source-orientation.html
+          function loadDeviceOrientation() {
+            var orientation = window.orientation || 0;
+
+            var cX = Math.cos(beta * (Math.PI / 180));
+            var cY = Math.cos(gamma * (Math.PI / 180));
+            var cZ = Math.cos(alpha * (Math.PI / 180));
+
+            var sX = Math.sin(beta * (Math.PI / 180));
+            var sY = Math.sin(gamma * (Math.PI / 180));
+            var sZ = Math.sin(alpha * (Math.PI / 180));
+
+            var m11 = cZ * cY - sZ * sX * sY;
+            var m12 = -cX * sZ;
+            var m13 = cY * sZ * sX + cZ * sY;
+
+            var m21 = cY * sZ + cZ * sX * sY;
+            var m22 = cZ * cX;
+            var m23 = sZ * sY - cZ * cY * sX;
+
+            var m31 = -cX * sY;
+            var m32 = sX;
+            var m33 = cX * cY;
+
+            var rc = Math.cos(orientation * (Math.PI / 180));
+            var rs = Math.sin(orientation * (Math.PI / 180));
+
+            cameraMatrix.set(
+              0, -1, 0, 0,
+              0, 0, 1, 0,
+              -1, 0, 0, 0,
+              0, 0, 0, 1
+            ).multiply(temporaryMatrix.set(
+              rc * m11 - rs * m12, rs * m11 + rc * m12, m13, 0,
+              rc * m21 - rs * m22, rs * m21 + rc * m22, m23, 0,
+              rc * m31 - rs * m32, rs * m31 + rc * m32, m33, 0,
+              0, 0, 0, 1
+            ));
+          }
+
+          var cameraMatrix = new THREE.Matrix4();
+          var temporaryMatrix = new THREE.Matrix4();
+          var screenWidth = 1;
+          var screenHeight = 1;
+          var delta = new THREE.Vector3();
+
+          ship.position.set(0, 100, 0);
+
+          function render() {
+            var leftWidth = screenWidth / 2 | 0;
+
+            var currentTime = performance.now();
+            var seconds = (currentTime - previousTime) / 1000;
+            previousTime = currentTime;
+
+            var left = !!keyState[37];
+            var up = !!keyState[38];
+            var right = !!keyState[39];
+            var down = !!keyState[40];
+            ship.rotation.y += (left - right) * seconds;
+            var speed = (up - down) * 50 * seconds;
+            ship.position.x -= Math.cos(ship.rotation.y) * speed;
+            ship.position.z += Math.sin(ship.rotation.y) * speed;
+
+            // Try to render a frame ahead due to lag inherent in the pipeline
+            alpha += alphaRate * seconds;
+            beta += betaRate * seconds;
+            gamma += gammaRate * seconds;
+
+            loadDeviceOrientation();
+
+            cameraLeft.quaternion.setFromRotationMatrix(cameraMatrix);
+            cameraRight.quaternion.setFromRotationMatrix(cameraMatrix);
+
+            cameraLeft.position.set(cameraMatrix.elements[8], cameraMatrix.elements[9], cameraMatrix.elements[10]).multiplyScalar(cameraDistance);
+            cameraRight.position.set(cameraMatrix.elements[8], cameraMatrix.elements[9], cameraMatrix.elements[10]).multiplyScalar(cameraDistance);
+
+            delta.set(cameraMatrix.elements[0], cameraMatrix.elements[1], cameraMatrix.elements[2]).multiplyScalar(2.5);
+            cameraLeft.position.add(ship.position).sub(delta);
+            cameraRight.position.add(ship.position).add(delta);
+
+            requestAnimationFrame(render);
+
+            rtTexture.viewport = new THREE.Vector4(0, 0, leftWidth, screenHeight);
+            renderer.render(scene, cameraLeft, rtTexture, true);
+
+            rtTexture.viewport = new THREE.Vector4(leftWidth, 0, screenWidth - leftWidth, screenHeight);
+            renderer.render(scene, cameraRight, rtTexture, false);
+
+            renderer.setViewport(0, 0, screenWidth, screenHeight);
+            renderer.render(sceneScreen, cameraScreen, null, true);
+          }
+
+          ondevicemotion = function(e) {
+            var rotationRate = e.rotationRate;
+            if (rotationRate) {
+              alphaRate = rotationRate.alpha;
+              betaRate = rotationRate.beta;
+              gammaRate = rotationRate.gamma;
+            }
           };
 
-          onmouseup = function(e) {
-            onmousemove = null;
-            onmouseup = null;
+          ondeviceorientation = function(e) {
+            alpha = e.alpha;
+            beta = e.beta;
+            gamma = e.gamma;
           };
-        };
 
-        onresize = function() {
-          var ratio = window.devicePixelRatio || 1;
-          screenWidth = Math.round(innerWidth * ratio);
-          screenHeight = Math.round(innerHeight * ratio);
-          renderer.setSize(screenWidth, screenHeight, false);
-          rtTexture.setSize(screenWidth, screenHeight);
-        };
+          ontouchstart = function(e) {
+            e.preventDefault();
+          };
 
-        onresize();
+          onmousedown = function(e) {
+            e.preventDefault();
 
-        render();
+            var oldX = e.pageX;
+            var oldY = e.pageY;
+
+            onmousemove = function(e) {
+              alpha -= e.pageX - oldX;
+              beta -= e.pageY - oldY;
+
+              alpha -= Math.floor(alpha / 360) * 360;
+              beta = Math.max(0, Math.min(beta, 180));
+
+              oldX = e.pageX;
+              oldY = e.pageY;
+            };
+
+            onmouseup = function(e) {
+              onmousemove = null;
+              onmouseup = null;
+            };
+          };
+
+          onresize = function() {
+            var ratio = window.devicePixelRatio || 1;
+            screenWidth = Math.round(innerWidth * ratio);
+            screenHeight = Math.round(innerHeight * ratio);
+            renderer.setSize(screenWidth, screenHeight, false);
+            rtTexture.setSize(screenWidth, screenHeight);
+          };
+
+          var socket = null;
+          var keyState = {};
+          var hasKeys = false;
+
+          function sendKeyState() {
+            hasKeys = true;
+            try { socket.send(JSON.stringify(keyState)); } catch (e) {}
+          }
+
+          onkeydown = function(e) {
+            keyState[e.which] = true;
+            sendKeyState();
+          };
+
+          onkeyup = function(e) {
+            delete keyState[e.which];
+            sendKeyState();
+          };
+
+          onblur = onfocus = function() {
+            keyState = {};
+          };
+
+          function openSocket() {
+            socket = new WebSocket('ws://' + location.host);
+
+            socket.onmessage = function(e) {
+              if (!hasKeys) {
+                keyState = JSON.parse(e.data);
+              }
+            };
+
+            socket.onclose = function() {
+              socket.onopen = null;
+              socket.onmessage = null;
+              socket.onclose = null;
+              try { socket.close(); } catch (e) {}
+              socket = null;
+              setTimeout(openSocket, 500);
+            };
+          }
+
+          openSocket();
+          onresize();
+          render();
+        });
       });
     });
   });
